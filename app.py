@@ -418,6 +418,98 @@ if st.session_state['download_results']:
     with col_h2:
         st.info("💡 Open the HTML file in your browser and click links to download PDFs")
     
+    st.markdown("---")
+    st.subheader("📥 Bulk Download Options")
+    
+    col_d1, col_d2 = st.columns([3, 1])
+    with col_d1:
+        # Default folder name based on selection
+        default_folder = f"voter_pdfs_{selected_muni_code}_ward{str(selected_muni_code)}" 
+        target_folder = st.text_input("Save PDFs to folder:", value="extracted_voter_pdfs")
+        
+    with col_d2:
+        st.write("") # Spacer
+        st.write("")
+        download_clicked = st.button("📥 Download All PDFs", type="primary")
+        
+    if download_clicked:
+        if not os.path.exists(target_folder):
+            os.makedirs(target_folder)
+            
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        session = get_session()
+        
+        success_count = 0
+        total_files = len(df)
+        
+        # CRITICAL: Submit the form first to authorize the session for downloads
+        status_text.text("Authorizing session with server...")
+        try:
+            first_row = df.iloc[0]
+            form_url = f"{BASE_URL}/slNoWardWiseVoterlisturbanMapped.do"
+            form_data = {
+                'mode': 'getWardWiseData',
+                'property(election_id)': first_row.get('Election Code', selected_election_code) if 'Election Code' in df.columns else selected_election_code,
+                'property(district_id)': first_row.get('District Code', selected_district_code) if 'District Code' in df.columns else selected_district_code,
+                'property(municipality_id)': first_row.get('Municipality Code', selected_muni_code) if 'Municipality Code' in df.columns else selected_muni_code,
+                'property(ward_id)': first_row['Ward Code'],
+                'property(part_no)': first_row['AC Part No']
+            }
+            session.headers.update({
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Referer': form_url
+            })
+            auth_response = session.post(form_url, data=form_data, verify=False, timeout=60)
+            if auth_response.status_code == 200:
+                status_text.text("Session authorized. Starting downloads...")
+            else:
+                st.warning(f"Authorization returned status {auth_response.status_code}. Downloads may fail.")
+            # Remove Content-Type for subsequent GET requests
+            if 'Content-Type' in session.headers:
+                del session.headers['Content-Type']
+        except Exception as e:
+            st.warning(f"Session authorization step failed: {e}. Proceeding anyway...")
+
+        # Ensure 'Filename' column exists before loop (backward compatibility)
+        if 'Filename' not in df.columns:
+            df['Filename'] = df.apply(lambda x: f"voterlist_ward{x['Ward Code']}_part{x['AC Part No']}.pdf", axis=1)
+
+        for index, row in df.iterrows():
+            filename = row.get('Filename')
+            if not filename:
+                filename = f"voterlist_ward{row['Ward Code']}_part{row['AC Part No']}.pdf"
+
+            status_text.text(f"Downloading {filename} ({index+1}/{total_files})...")
+            
+            # Use the link constructed earlier, or reconstruct parameters
+            # The 'Link' column has the full URL
+            pdf_url = row['Link']
+            
+            try:
+                # Use the session that has the cookies!
+                response = session.get(pdf_url, stream=True, timeout=60)
+                
+                if response.status_code == 200 and 'application/pdf' in response.headers.get('Content-Type', ''):
+                    file_path = os.path.join(target_folder, filename)
+                    with open(file_path, 'wb') as f:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                    success_count += 1
+                else:
+                    st.warning(f"Failed to download {filename}: Status {response.status_code}")
+                    # Log error if not PDF
+                    if 'application/pdf' not in response.headers.get('Content-Type', ''):
+                        st.error(f"Server returned non-PDF content for {filename}")
+                        
+            except Exception as e:
+                st.error(f"Error downloading {filename}: {e}")
+                
+            progress_bar.progress((index + 1) / total_files)
+            
+        status_text.success(f"Download Complete! Saved {success_count}/{total_files} files to '{os.path.abspath(target_folder)}'")
+        progress_bar.empty()
+        
     # Excel Download
     try:
         from io import BytesIO
@@ -446,138 +538,3 @@ if st.button("Clear Logs", key="clear_logs"):
 if 'logs' in st.session_state:
     for msg in st.session_state['logs']:
         st.sidebar.text(msg)
-
-# --- PDF to Excel Conversion Section ---
-st.markdown("---")
-st.header("📄 PDF to Excel Converter")
-st.markdown("Upload voter list PDFs to extract data into Excel format.")
-
-uploaded_files = st.file_uploader(
-    "Upload PDF files",
-    type=['pdf'],
-    accept_multiple_files=True,
-    help="Select one or more voter list PDF files to convert"
-)
-
-if uploaded_files:
-    st.info(f"📁 {len(uploaded_files)} file(s) selected")
-    
-    if st.button("🔄 Convert PDFs to Excel", type="primary"):
-        try:
-            import pdfplumber
-        except ImportError:
-            st.error("❌ pdfplumber not installed. Run: `pip install pdfplumber`")
-            st.stop()
-        
-        all_voters = []
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        for file_idx, uploaded_file in enumerate(uploaded_files):
-            status_text.text(f"Processing {uploaded_file.name} ({file_idx + 1}/{len(uploaded_files)})...")
-            
-            try:
-                with pdfplumber.open(uploaded_file) as pdf:
-                    for page_num, page in enumerate(pdf.pages):
-                        text = page.extract_text()
-                        if not text:
-                            continue
-                        
-                        # Parse voter entries using regex patterns
-                        # Pattern matches the card-like structure in the PDF
-                        lines = text.split('\n')
-                        
-                        current_voter = {}
-                        for line in lines:
-                            line = line.strip()
-                            
-                            # Match AC No.-PS No.-SLNo pattern
-                            ac_match = re.search(r'A\.?C\.?\s*No\.?[-:\s]*PS\s*No\.?[-:\s]*SL\.?No\.?\s*[:.\s]*(\d+)\s*[-]\s*(\d+)\s*[-]\s*(\d+)', line, re.IGNORECASE)
-                            if ac_match:
-                                if current_voter and current_voter.get('Name'):
-                                    all_voters.append(current_voter)
-                                current_voter = {
-                                    'Source File': uploaded_file.name,
-                                    'Page': page_num + 1,
-                                    'AC No': ac_match.group(1),
-                                    'PS No': ac_match.group(2),
-                                    'SL No': ac_match.group(3)
-                                }
-                                continue
-                            
-                            # Match Name
-                            name_match = re.match(r'^Name\s*[:.]?\s*(.+)$', line, re.IGNORECASE)
-                            if name_match and current_voter:
-                                current_voter['Name'] = name_match.group(1).strip()
-                                continue
-                            
-                            # Match Father/Husband Name
-                            father_match = re.match(r'^(Father|Husband)\s*(Name)?\s*[:.]?\s*(.+)$', line, re.IGNORECASE)
-                            if father_match and current_voter:
-                                current_voter['Father/Husband Name'] = father_match.group(3).strip()
-                                continue
-                            
-                            # Match Age and Sex
-                            age_match = re.search(r'Age\s*[:.]?\s*(\d+)', line, re.IGNORECASE)
-                            sex_match = re.search(r'Sex\s*[:.]?\s*([MF])', line, re.IGNORECASE)
-                            if age_match and current_voter:
-                                current_voter['Age'] = age_match.group(1)
-                            if sex_match and current_voter:
-                                current_voter['Sex'] = sex_match.group(1)
-                            
-                            # Match Door No
-                            door_match = re.match(r'^Door\s*No\.?\s*[:.]?\s*(.+)$', line, re.IGNORECASE)
-                            if door_match and current_voter:
-                                current_voter['Door No'] = door_match.group(1).strip()
-                                continue
-                            
-                            # Match EPIC No
-                            epic_match = re.match(r'^EPIC\s*No\.?\s*[:.]?\s*([A-Z0-9]+)', line, re.IGNORECASE)
-                            if epic_match and current_voter:
-                                current_voter['EPIC No'] = epic_match.group(1).strip()
-                                continue
-                        
-                        # Don't forget the last voter
-                        if current_voter and current_voter.get('Name'):
-                            all_voters.append(current_voter)
-                            
-            except Exception as e:
-                st.warning(f"⚠️ Error processing {uploaded_file.name}: {e}")
-            
-            progress_bar.progress((file_idx + 1) / len(uploaded_files))
-        
-        progress_bar.empty()
-        
-        if all_voters:
-            df_voters = pd.DataFrame(all_voters)
-            
-            # Reorder columns
-            cols = ['Source File', 'Page', 'AC No', 'PS No', 'SL No', 'Name', 
-                   'Father/Husband Name', 'Age', 'Sex', 'Door No', 'EPIC No']
-            cols = [c for c in cols if c in df_voters.columns]
-            df_voters = df_voters[cols]
-            
-            st.success(f"✅ Extracted {len(df_voters)} voter records from {len(uploaded_files)} PDF(s)")
-            
-            # Display preview
-            st.dataframe(df_voters.head(100), use_container_width=True)
-            if len(df_voters) > 100:
-                st.info(f"Showing first 100 of {len(df_voters)} records")
-            
-            # Excel download
-            from io import BytesIO
-            output = BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                df_voters.to_excel(writer, index=False, sheet_name='VoterData')
-            excel_data = output.getvalue()
-            
-            st.download_button(
-                label="📥 Download Excel File",
-                data=excel_data,
-                file_name=f"voter_data_extracted_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="download-pdf-excel"
-            )
-        else:
-            st.warning("⚠️ No voter data could be extracted. The PDF format may not match the expected structure.")
-            st.info("💡 Tip: This extractor works best with standard TSEC voter list PDFs.")
