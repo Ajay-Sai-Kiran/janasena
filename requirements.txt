@@ -5,3 +5,4 @@ beautifulsoup4
 openpyxl
 urllib3
 lxml
+pdfplumber
