@@ -8,6 +8,7 @@ import os
 import connection
 from bs4 import BeautifulSoup
 import re
+import glob
 
 # Set page config
 st.set_page_config(
@@ -77,22 +78,20 @@ def fetch_initial_data():
             
             # Elections
             elections = []
-            # Updated ID: election_id
             election_select = soup.find('select', {'id': 'election_id'})
             if election_select:
                 for opt in election_select.find_all('option'):
                     val = opt.get('value')
-                    if val and val != '0': # Skip "Select"
+                    if val and val != '0':
                         elections.append({'id': val, 'name': opt.text.strip()})
             
             # Districts
             districts = []
-            # Updated ID: district_id
             district_select = soup.find('select', {'id': 'district_id'})
             if district_select:
                 for opt in district_select.find_all('option'):
                     val = opt.get('value')
-                    if val and val != '0': # Skip "Select"
+                    if val and val != '0':
                         districts.append({'id': val, 'name': opt.text.strip()})
                         
             return elections, districts
@@ -101,7 +100,6 @@ def fetch_initial_data():
         st.error(f"Error fetching initial data: {e}")
         log_request(url, f"Error: {e}")
         
-        # Fallback Data
         st.warning("⚠️ Connection failed. Using fallback data (Nizamabad / 2026 Election).")
         fallback_elections = [{'id': '186', 'name': 'ORDINARY ELECTIONS TO MUNICIPALITIES AND MUNICIPAL CORPORATIONS, 2026'}]
         fallback_districts = [{'id': '05', 'name': 'Nizamabad'}]
@@ -111,7 +109,6 @@ def fetch_initial_data():
 
 def fetch_municipalities(district_code):
     session = get_session()
-    # Updated Endpoint based on HTML JS: wardwisevoterlisturban.do?mode=getMunicipality&district_id=05
     url = f"{BASE_URL}/wardwisevoterlisturban.do"
     params = {'mode': 'getMunicipality', 'district_id': district_code}
     log_request(url, params)
@@ -119,8 +116,6 @@ def fetch_municipalities(district_code):
         response = session.post(url, params=params, timeout=30)
         log_request(url, f"Status: {response.status_code}")
         if response.status_code == 200:
-            # The response is likely HTML options, not JSON.
-            # <option value="1">...</option>
             soup = BeautifulSoup(response.content, 'html.parser')
             options = []
             for opt in soup.find_all('option'):
@@ -135,7 +130,6 @@ def fetch_municipalities(district_code):
 
 def fetch_wards(district_code, municipality_code):
     session = get_session()
-    # Updated Endpoint based on HTML JS: wardwisevoterlisturban.do?mode=getWard&district_id=..&municipality_id=..
     url = f"{BASE_URL}/wardwisevoterlisturban.do"
     params = {'mode': 'getWard', 'district_id': district_code, 'municipality_id': municipality_code}
     log_request(url, params)
@@ -143,7 +137,6 @@ def fetch_wards(district_code, municipality_code):
         response = session.post(url, params=params, timeout=30)
         log_request(url, f"Status: {response.status_code}")
         if response.status_code == 200:
-            # Response is HTML options
             soup = BeautifulSoup(response.content, 'html.parser')
             options = []
             for opt in soup.find_all('option'):
@@ -158,7 +151,6 @@ def fetch_wards(district_code, municipality_code):
 
 def fetch_ac_parts(ward_code, municipality_code, district_code):
     session = get_session()
-    # Updated Endpoint: slNoWardWiseVoterlisturbanMapped.do?mode=getPartNos...
     url = f"{BASE_URL}/slNoWardWiseVoterlisturbanMapped.do"
     params = {
         'mode': 'getPartNos',
@@ -172,7 +164,6 @@ def fetch_ac_parts(ward_code, municipality_code, district_code):
         response = session.post(url, params=params, timeout=30)
         log_request(url, f"Status: {response.status_code}")
         if response.status_code == 200:
-             # Response is HTML options
             soup = BeautifulSoup(response.content, 'html.parser')
             parts = []
             for opt in soup.find_all('option'):
@@ -201,9 +192,7 @@ if not st.session_state['elections'] or not st.session_state['districts']:
 col1, col2 = st.columns(2)
 
 with col1:
-    # 1. Election
     election_options = {e['id']: e['name'] for e in st.session_state['elections']}
-    # default to index 0 if available
     idx = 0
     selected_election_code = st.selectbox(
         "Election", 
@@ -212,7 +201,6 @@ with col1:
         index=idx
     )
 
-    # 2. District
     district_options = {d['id']: d['name'] for d in st.session_state['districts']}
     selected_district_code = st.selectbox(
         "District", 
@@ -220,13 +208,10 @@ with col1:
         format_func=lambda x: district_options.get(x, x)
     )
 
-    # 3. Municipality
-    # Retrieve Munis based on district selection
     if 'last_district' not in st.session_state:
         st.session_state['last_district'] = None
         
     if selected_district_code != st.session_state['last_district']:
-         # Auto-fetch municipalities when district changes
          if selected_district_code:
             with st.spinner("Fetching Municipalities..."):
                 munis = fetch_municipalities(selected_district_code)
@@ -242,8 +227,6 @@ with col1:
     )
 
 with col2:
-    # 4. Wards
-    # Retrieve Wards based on muni selection
     if 'last_muni' not in st.session_state:
         st.session_state['last_muni'] = None
         
@@ -256,7 +239,6 @@ with col2:
              
     ward_options = {w['id']: w['name'] for w in st.session_state['wards']}
     
-    # Selection Mode
     selection_mode = st.radio("Scope", ["Specific Ward", "All Wards in Municipality"])
     
     selected_wards_data = [] 
@@ -270,7 +252,6 @@ with col2:
         if specific_ward_code:
              selected_wards_data = [{'code': specific_ward_code, 'name': ward_options[specific_ward_code]}]
     else:
-        # All Wards
         if ward_options:
              selected_wards_data = [{'code': k, 'name': v} for k,v in ward_options.items()]
              st.info(f"Will process {len(selected_wards_data)} wards")
@@ -293,7 +274,6 @@ if st.button("Generate Excel Report", type="primary"):
         for i, ward in enumerate(selected_wards_data):
             status_text.text(f"Processing {ward['name']} ({i+1}/{total})...")
             
-            # Fetch parts for this ward
             parts = fetch_ac_parts(ward['code'], selected_muni_code, selected_district_code)
             
             if not parts:
@@ -311,8 +291,6 @@ if st.button("Generate Excel Report", type="primary"):
             else:
                 for part in parts:
                     p_no = str(part['partno'])
-                    # Generate Direct Download Link using CORRECT endpoint
-                    # URL: slNoWardWiseVoterlisturbanMapped.do?mode=createViewInEnglishReport&election_id=186&district_id=05&mnc_id=1&ward_id=1&circle_id=0&part_no=22
                     download_url = (
                         f"{BASE_URL}/slNoWardWiseVoterlisturbanMapped.do?"
                         f"mode=createViewInEnglishReport&"
@@ -340,7 +318,7 @@ if st.button("Generate Excel Report", type="primary"):
                     })
             
             progress_bar.progress((i + 1) / total)
-            time.sleep(0.05) # Yield to UI
+            time.sleep(0.05)
             
         st.session_state['download_results'] = results
         status_text.text("Processing Complete!")
@@ -351,8 +329,6 @@ if st.session_state['download_results']:
     df = pd.DataFrame(st.session_state['download_results'])
     st.success(f"Found {len(df)} records.")
     
-    # Display Data with clickable links
-    # Create a copy with clickable links for display
     df_display = df.copy()
     if 'Link' in df_display.columns:
         df_display['Link'] = df_display['Link'].apply(lambda x: f'<a href="{x}" target="_blank">📥 Download</a>')
@@ -360,13 +336,10 @@ if st.session_state['download_results']:
     st.markdown("**Tip:** Click the links below to download PDFs in your browser (most reliable method)")
     st.markdown(df_display.to_html(escape=False, index=False), unsafe_allow_html=True)
     
-    # Generate HTML file with all clickable links
     st.markdown("---")
     st.subheader("📄 Download Options")
     
-    # Create HTML file with clickable links
-    html_content = f'''
-<!DOCTYPE html>
+    html_content = f'''<!DOCTYPE html>
 <html>
 <head>
     <title>Voter List PDF Links - {datetime.now().strftime("%Y-%m-%d %H:%M")}</title>
@@ -378,33 +351,18 @@ if st.session_state['download_results']:
         th {{ background-color: #4CAF50; color: white; }}
         tr:nth-child(even) {{ background-color: #f2f2f2; }}
         a {{ color: #1a73e8; text-decoration: none; }}
-        a:hover {{ text-decoration: underline; }}
         .download-btn {{ background: #4CAF50; color: white; padding: 5px 10px; border-radius: 3px; }}
     </style>
 </head>
 <body>
     <h1>Voter List PDF Download Links</h1>
     <p>Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
-    <p><strong>Instructions:</strong> Click any link to download the PDF. Make sure you're logged into the TSEC website in the same browser first.</p>
     <table>
-        <tr>
-            <th>#</th>
-            <th>Ward</th>
-            <th>Part No</th>
-            <th>Download Link</th>
-        </tr>
+        <tr><th>#</th><th>Ward</th><th>Part No</th><th>Download Link</th></tr>
 '''
     for idx, row in df.iterrows():
-        html_content += f'''        <tr>
-            <td>{idx + 1}</td>
-            <td>{row.get('Ward Name', row.get('Ward Code', 'N/A'))}</td>
-            <td>{row.get('AC Part No', 'N/A')}</td>
-            <td><a href="{row['Link']}" target="_blank" class="download-btn">📥 Download PDF</a></td>
-        </tr>
-'''
-    html_content += '''    </table>
-</body>
-</html>'''
+        html_content += f'''<tr><td>{idx + 1}</td><td>{row.get('Ward Name', 'N/A')}</td><td>{row.get('AC Part No', 'N/A')}</td><td><a href="{row['Link']}" target="_blank" class="download-btn">📥 Download PDF</a></td></tr>'''
+    html_content += '''</table></body></html>'''
     
     col_h1, col_h2 = st.columns(2)
     with col_h1:
@@ -412,110 +370,16 @@ if st.session_state['download_results']:
             label="📄 Download HTML with Links",
             data=html_content,
             file_name=f"voter_pdf_links_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
-            mime="text/html",
-            help="Download an HTML file with all clickable links. Open in your browser to download PDFs."
+            mime="text/html"
         )
     with col_h2:
         st.info("💡 Open the HTML file in your browser and click links to download PDFs")
     
-    st.markdown("---")
-    st.subheader("📥 Bulk Download Options")
-    
-    col_d1, col_d2 = st.columns([3, 1])
-    with col_d1:
-        # Default folder name based on selection
-        default_folder = f"voter_pdfs_{selected_muni_code}_ward{str(selected_muni_code)}" 
-        target_folder = st.text_input("Save PDFs to folder:", value="extracted_voter_pdfs")
-        
-    with col_d2:
-        st.write("") # Spacer
-        st.write("")
-        download_clicked = st.button("📥 Download All PDFs", type="primary")
-        
-    if download_clicked:
-        if not os.path.exists(target_folder):
-            os.makedirs(target_folder)
-            
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        session = get_session()
-        
-        success_count = 0
-        total_files = len(df)
-        
-        # CRITICAL: Submit the form first to authorize the session for downloads
-        status_text.text("Authorizing session with server...")
-        try:
-            first_row = df.iloc[0]
-            form_url = f"{BASE_URL}/slNoWardWiseVoterlisturbanMapped.do"
-            form_data = {
-                'mode': 'getWardWiseData',
-                'property(election_id)': first_row.get('Election Code', selected_election_code) if 'Election Code' in df.columns else selected_election_code,
-                'property(district_id)': first_row.get('District Code', selected_district_code) if 'District Code' in df.columns else selected_district_code,
-                'property(municipality_id)': first_row.get('Municipality Code', selected_muni_code) if 'Municipality Code' in df.columns else selected_muni_code,
-                'property(ward_id)': first_row['Ward Code'],
-                'property(part_no)': first_row['AC Part No']
-            }
-            session.headers.update({
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Referer': form_url
-            })
-            auth_response = session.post(form_url, data=form_data, verify=False, timeout=60)
-            if auth_response.status_code == 200:
-                status_text.text("Session authorized. Starting downloads...")
-            else:
-                st.warning(f"Authorization returned status {auth_response.status_code}. Downloads may fail.")
-            # Remove Content-Type for subsequent GET requests
-            if 'Content-Type' in session.headers:
-                del session.headers['Content-Type']
-        except Exception as e:
-            st.warning(f"Session authorization step failed: {e}. Proceeding anyway...")
-
-        # Ensure 'Filename' column exists before loop (backward compatibility)
-        if 'Filename' not in df.columns:
-            df['Filename'] = df.apply(lambda x: f"voterlist_ward{x['Ward Code']}_part{x['AC Part No']}.pdf", axis=1)
-
-        for index, row in df.iterrows():
-            filename = row.get('Filename')
-            if not filename:
-                filename = f"voterlist_ward{row['Ward Code']}_part{row['AC Part No']}.pdf"
-
-            status_text.text(f"Downloading {filename} ({index+1}/{total_files})...")
-            
-            # Use the link constructed earlier, or reconstruct parameters
-            # The 'Link' column has the full URL
-            pdf_url = row['Link']
-            
-            try:
-                # Use the session that has the cookies!
-                response = session.get(pdf_url, stream=True, timeout=60)
-                
-                if response.status_code == 200 and 'application/pdf' in response.headers.get('Content-Type', ''):
-                    file_path = os.path.join(target_folder, filename)
-                    with open(file_path, 'wb') as f:
-                        for chunk in response.iter_content(chunk_size=8192):
-                            f.write(chunk)
-                    success_count += 1
-                else:
-                    st.warning(f"Failed to download {filename}: Status {response.status_code}")
-                    # Log error if not PDF
-                    if 'application/pdf' not in response.headers.get('Content-Type', ''):
-                        st.error(f"Server returned non-PDF content for {filename}")
-                        
-            except Exception as e:
-                st.error(f"Error downloading {filename}: {e}")
-                
-            progress_bar.progress((index + 1) / total_files)
-            
-        status_text.success(f"Download Complete! Saved {success_count}/{total_files} files to '{os.path.abspath(target_folder)}'")
-        progress_bar.empty()
-        
     # Excel Download
     try:
         from io import BytesIO
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            # Drop the Link column for cleaner Excel
             df_export = df.drop(columns=['Link'], errors='ignore')
             df_export.to_excel(writer, index=False, sheet_name='VoterData')
         excel_data = output.getvalue()
@@ -529,6 +393,192 @@ if st.session_state['download_results']:
         )
     except Exception as e:
         st.error(f"Excel generation failed: {e}")
+
+# --- PDF to Excel Conversion & Merge Section ---
+st.markdown("---")
+st.header("📄 PDF Tools")
+
+tab_merge, tab_extract = st.tabs(["📎 Merge PDFs", "📊 PDF to Excel"])
+
+with tab_merge:
+    st.markdown("Upload multiple voter list PDFs to merge them into a single PDF file.")
+    
+    merge_files = st.file_uploader(
+        "Upload PDFs to merge",
+        type=['pdf'],
+        accept_multiple_files=True,
+        key="merge_uploader"
+    )
+    
+    if merge_files:
+        st.info(f"📁 {len(merge_files)} file(s) selected")
+        
+        if st.button("📎 Merge into Single PDF", type="primary", key="merge_btn"):
+            try:
+                from PyPDF2 import PdfMerger
+                from io import BytesIO
+                
+                merger = PdfMerger()
+                for pdf in merge_files:
+                    pdf.seek(0)
+                    merger.append(pdf)
+                
+                output = BytesIO()
+                merger.write(output)
+                merger.close()
+                output.seek(0)
+                
+                st.download_button(
+                    label="📥 Download Merged PDF",
+                    data=output.getvalue(),
+                    file_name=f"merged_voterlist_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                    mime="application/pdf",
+                    key="download-merged"
+                )
+                st.success(f"✅ Merged {len(merge_files)} PDFs successfully!")
+            except ImportError:
+                st.error("❌ PyPDF2 not installed. Run: `pip install PyPDF2`")
+            except Exception as e:
+                st.error(f"Merge failed: {e}")
+
+with tab_extract:
+    st.markdown("Upload voter list PDFs to extract voter data into Excel format.")
+    
+    extract_files = st.file_uploader(
+        "Upload PDFs to extract data",
+        type=['pdf'],
+        accept_multiple_files=True,
+        key="extract_uploader"
+    )
+    
+    if extract_files:
+        st.info(f"📁 {len(extract_files)} file(s) selected")
+        
+        if st.button("🔄 Convert PDFs to Excel", type="primary", key="extract_btn"):
+            try:
+                import pdfplumber
+            except ImportError:
+                st.error("❌ pdfplumber not installed. Run: `pip install pdfplumber`")
+                st.stop()
+            
+            all_voters = []
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            for file_idx, uploaded_file in enumerate(extract_files):
+                status_text.text(f"Processing {uploaded_file.name} ({file_idx + 1}/{len(extract_files)})...")
+                
+                try:
+                    with pdfplumber.open(uploaded_file) as pdf:
+                        for page_num, page in enumerate(pdf.pages):
+                            text = page.extract_text()
+                            if not text:
+                                continue
+                            
+                            # Extract ward from filename
+                            ward_match = re.search(r'ward[-_]?(\d+)', uploaded_file.name, re.IGNORECASE)
+                            ward_from_filename = ward_match.group(1) if ward_match else 'Unknown'
+                            
+                            lines = text.split('\n')
+                            current_voter = {}
+                            
+                            for line in lines:
+                                line = line.strip()
+                                
+                                # Match AC No.-PS No.-SLNo pattern
+                                ac_match = re.search(r'A\.?C\.?\s*No\.?.*?PS\s*No\.?.*?SL\.?\s*No\.?.*?:\s*(\d+)\s*[-–]\s*(\d+)\s*[-–]\s*(\d+)', line, re.IGNORECASE)
+                                if ac_match:
+                                    if current_voter and current_voter.get('Name'):
+                                        all_voters.append(current_voter)
+                                    current_voter = {
+                                        'Source File': uploaded_file.name,
+                                        'Ward': ward_from_filename,
+                                        'AC No': ac_match.group(1),
+                                        'PS No': ac_match.group(2),
+                                        'SL No': ac_match.group(3)
+                                    }
+                                    continue
+                                
+                                # Match Name
+                                name_match = re.match(r'^Name\s*[:.]?\s*(.+)$', line, re.IGNORECASE)
+                                if name_match and current_voter:
+                                    current_voter['Name'] = name_match.group(1).strip()
+                                    continue
+                                
+                                # Match Father/Husband Name
+                                father_match = re.match(r'^(Father|Husband)\s*(Name)?\s*[:.]?\s*(.+)$', line, re.IGNORECASE)
+                                if father_match and current_voter:
+                                    current_voter['Father/Husband Name'] = father_match.group(3).strip()
+                                    continue
+                                
+                                # Match Age and Sex
+                                age_match = re.search(r'Age\s*[:.]?\s*(\d+)', line, re.IGNORECASE)
+                                sex_match = re.search(r'Sex\s*[:.]?\s*([MF])', line, re.IGNORECASE)
+                                if age_match and current_voter:
+                                    current_voter['Age'] = age_match.group(1)
+                                if sex_match and current_voter:
+                                    current_voter['Sex'] = sex_match.group(1)
+                                
+                                # Match Door No
+                                door_match = re.match(r'^Door\s*No\.?\s*[:.]?\s*(.+)$', line, re.IGNORECASE)
+                                if door_match and current_voter:
+                                    current_voter['Door No'] = door_match.group(1).strip()
+                                    continue
+                                
+                                # Match EPIC No
+                                epic_match = re.match(r'^EPIC\s*No\.?\s*[:.]?\s*([A-Z0-9]+)', line, re.IGNORECASE)
+                                if epic_match and current_voter:
+                                    current_voter['EPIC No'] = epic_match.group(1).strip()
+                                    continue
+                            
+                            if current_voter and current_voter.get('Name'):
+                                all_voters.append(current_voter)
+                                
+                except Exception as e:
+                    st.warning(f"⚠️ Error processing {uploaded_file.name}: {e}")
+                
+                progress_bar.progress((file_idx + 1) / len(extract_files))
+            
+            progress_bar.empty()
+            status_text.empty()
+            
+            if all_voters:
+                df_voters = pd.DataFrame(all_voters)
+                
+                cols = ['Source File', 'Ward', 'AC No', 'PS No', 'SL No', 'Name', 
+                       'Father/Husband Name', 'Age', 'Sex', 'Door No', 'EPIC No']
+                cols = [c for c in cols if c in df_voters.columns]
+                df_voters = df_voters[cols]
+                
+                st.success(f"✅ Extracted {len(df_voters)} voter records from {len(extract_files)} PDF(s)")
+                
+                # Group by ward for separate sheets
+                wards = df_voters['Ward'].unique()
+                st.info(f"📋 Found {len(wards)} ward(s): {', '.join(sorted([str(w) for w in wards]))}")
+                
+                st.dataframe(df_voters.head(100), use_container_width=True)
+                if len(df_voters) > 100:
+                    st.caption(f"Showing first 100 of {len(df_voters)} records")
+                
+                # Excel with separate sheets per ward
+                from io import BytesIO
+                output = BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    df_voters.to_excel(writer, index=False, sheet_name='All Voters')
+                    for ward in sorted(wards):
+                        ward_df = df_voters[df_voters['Ward'] == ward]
+                        sheet_name = f"Ward_{ward}"[:31]
+                        ward_df.to_excel(writer, index=False, sheet_name=sheet_name)
+                
+                st.download_button(
+                    label="📥 Download Excel File",
+                    data=output.getvalue(),
+                    file_name=f"voter_data_extracted_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="download-extracted"
+                )
+            else:
+                st.warning("⚠️ No voter data could be extracted.")
 
 # Sidebar Logging
 st.sidebar.title("Connection Logs")
