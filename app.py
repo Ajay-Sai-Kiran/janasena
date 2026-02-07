@@ -397,8 +397,26 @@ if st.session_state['download_results']:
         <tr><th>#</th><th>Ward</th><th>Part No</th><th>Download Link</th></tr>
 '''
     for idx, row in df.iterrows():
-        html_content += f'''<tr><td>{idx + 1}</td><td>{row.get('Ward Name', 'N/A')}</td><td>{row.get('AC Part No', 'N/A')}</td><td><a href="{row['Link']}" target="_blank" class="download-btn">📥 Download PDF</a></td></tr>'''
-    html_content += '''</table></body></html>'''
+        filename = f"voterlist_ward{row.get('Ward Code', 'X')}_part{row.get('AC Part No', 'X')}.pdf"
+        html_content += f'''<tr><td>{idx + 1}</td><td>{row.get('Ward Name', 'N/A')}</td><td>{row.get('AC Part No', 'N/A')}</td><td><a href="{row['Link']}" download="{filename}" class="download-btn">📥 Download PDF</a></td></tr>'''
+    html_content += '''</table>
+    <script>
+    // Auto-click all download links with delay
+    function downloadAll() {
+        const links = document.querySelectorAll('a.download-btn');
+        let delay = 0;
+        links.forEach((link, i) => {
+            setTimeout(() => {
+                link.click();
+                document.getElementById('status').innerText = 'Downloading ' + (i+1) + '/' + links.length;
+            }, delay);
+            delay += 2000; // 2 second delay between downloads
+        });
+    }
+    </script>
+    <br><button onclick="downloadAll()" style="background:#4CAF50;color:white;padding:10px 20px;font-size:16px;cursor:pointer;">📥 Download All PDFs (Auto-Click)</button>
+    <span id="status"></span>
+</body></html>'''
     
     col_h1, col_h2 = st.columns(2)
     with col_h1:
