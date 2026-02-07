@@ -430,134 +430,98 @@ if st.session_state['download_results']:
     except Exception as e:
         st.error(f"Excel generation failed: {e}")
     
-    # --- Automatic Download & Merge Section ---
+    # --- In-Memory Download & Merge Section (Works on deployed apps) ---
     st.markdown("---")
     st.subheader("🚀 Auto-Download & Merge All PDFs")
-    st.markdown("Automatically download all PDFs and merge them into a single file using browser automation.")
+    st.markdown("Download all PDFs and merge them into a single file. Works on deployed apps!")
     
-    download_dir = st.text_input(
-        "Download folder:", 
-        value=os.path.join(os.path.expanduser("~"), "Downloads", "voter_pdfs"),
-        key="auto_download_dir"
-    )
+    st.warning("⚠️ **Note:** The TSEC website may block automated downloads. If this fails, use the 'Upload & Merge' option below instead.")
     
     if st.button("🚀 Download All & Merge into Single PDF", type="primary", key="auto_merge_btn"):
-        try:
-            from selenium import webdriver
-            from selenium.webdriver.chrome.options import Options
-            from selenium.webdriver.chrome.service import Service
-        except ImportError:
-            st.error("❌ Selenium not installed. Run: `pip install selenium webdriver-manager`")
-            st.stop()
-        
         try:
             from PyPDF2 import PdfMerger
         except ImportError:
             st.error("❌ PyPDF2 not installed. Run: `pip install PyPDF2`")
             st.stop()
         
-        # Create download directory
-        if not os.path.exists(download_dir):
-            os.makedirs(download_dir)
-        
-        st.info("🌐 Starting browser for automated downloads...")
-        
-        # Setup Chrome with PDF download preferences
-        options = Options()
-        prefs = {
-            "download.default_directory": download_dir,
-            "download.prompt_for_download": False,
-            "download.directory_upgrade": True,
-            "plugins.always_open_pdf_externally": True
-        }
-        options.add_experimental_option("prefs", prefs)
-        options.add_argument("--ignore-certificate-errors")
-        
-        try:
-            from webdriver_manager.chrome import ChromeDriverManager
-            service = Service(ChromeDriverManager().install())
-            driver = webdriver.Chrome(service=service, options=options)
-        except:
-            try:
-                driver = webdriver.Chrome(options=options)
-            except Exception as e:
-                st.error(f"Failed to start Chrome: {e}")
-                st.info("Make sure Chrome and ChromeDriver are installed.")
-                st.stop()
+        from io import BytesIO
         
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        try:
-            total_parts = len(df)
-            for idx, row in df.iterrows():
-                part_no = row.get('AC Part No', idx)
-                ward_name = row.get('Ward Name', row.get('Ward Code', 'Unknown'))
-                status_text.text(f"Downloading Ward {ward_name} Part {part_no} ({idx+1}/{total_parts})...")
-                
-                pdf_url = row['Link']
-                driver.get(pdf_url)
-                time.sleep(3)  # Wait for download
-                
-                progress_bar.progress((idx + 1) / total_parts)
+        session = get_session()
+        pdf_buffers = []
+        failed_downloads = []
+        
+        total_parts = len(df)
+        for idx, row in df.iterrows():
+            part_no = row.get('AC Part No', idx)
+            ward_name = row.get('Ward Name', row.get('Ward Code', 'Unknown'))
+            status_text.text(f"Downloading Ward {ward_name} Part {part_no} ({idx+1}/{total_parts})...")
             
-            status_text.text("Downloads complete. Closing browser...")
-            driver.quit()
+            pdf_url = row['Link']
             
-            # Wait for any pending downloads
-            time.sleep(2)
-            
-            # Find all PDFs in download folder
-            pdf_files = sorted(glob.glob(os.path.join(download_dir, "*.pdf")))
-            
-            if pdf_files:
-                st.success(f"✅ Found {len(pdf_files)} PDF files in download folder")
-                
-                # Merge PDFs
-                status_text.text("Merging PDFs into single file...")
-                merger = PdfMerger()
-                merged_count = 0
-                
-                for pdf_file in pdf_files:
-                    try:
-                        merger.append(pdf_file)
-                        merged_count += 1
-                    except Exception as e:
-                        st.warning(f"⚠️ Failed to add {os.path.basename(pdf_file)}: {e}")
-                
-                # Get ward name for output filename
-                first_ward = df.iloc[0].get('Ward Name', df.iloc[0].get('Ward Code', 'unknown'))
-                output_file = os.path.join(download_dir, f"merged_ward_{first_ward}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf")
-                merger.write(output_file)
-                merger.close()
-                
-                st.success(f"✅ Merged {merged_count} PDFs into: {output_file}")
-                
-                # Offer download button
-                with open(output_file, "rb") as f:
-                    st.download_button(
-                        label="📥 Download Merged PDF",
-                        data=f.read(),
-                        file_name=os.path.basename(output_file),
-                        mime="application/pdf",
-                        key="download-auto-merged"
-                    )
-            else:
-                st.warning("⚠️ No PDF files found in download folder.")
-                st.info("💡 The website may have returned HTML pages instead of PDFs. Try the manual method: download HTML file and click links in your browser.")
-                
-        except Exception as e:
-            st.error(f"Error during automation: {e}")
-            import traceback
-            st.code(traceback.format_exc())
-        finally:
             try:
-                driver.quit()
-            except:
-                pass
+                response = session.get(pdf_url, timeout=60, stream=True)
+                
+                if response.status_code == 200:
+                    content_type = response.headers.get('Content-Type', '')
+                    
+                    if 'pdf' in content_type.lower():
+                        pdf_buffer = BytesIO(response.content)
+                        pdf_buffers.append((f"ward{ward_name}_part{part_no}.pdf", pdf_buffer))
+                    else:
+                        failed_downloads.append(f"Part {part_no}: Not a PDF (got {content_type})")
+                else:
+                    failed_downloads.append(f"Part {part_no}: HTTP {response.status_code}")
+            except Exception as e:
+                failed_downloads.append(f"Part {part_no}: {str(e)[:50]}")
+            
+            progress_bar.progress((idx + 1) / total_parts)
         
         progress_bar.empty()
         status_text.empty()
+        
+        if pdf_buffers:
+            st.success(f"✅ Successfully downloaded {len(pdf_buffers)}/{total_parts} PDFs")
+            
+            if failed_downloads:
+                with st.expander(f"⚠️ {len(failed_downloads)} downloads failed"):
+                    for fail in failed_downloads:
+                        st.text(fail)
+            
+            # Merge PDFs
+            try:
+                merger = PdfMerger()
+                for filename, pdf_buffer in pdf_buffers:
+                    pdf_buffer.seek(0)
+                    merger.append(pdf_buffer)
+                
+                merged_output = BytesIO()
+                merger.write(merged_output)
+                merger.close()
+                merged_output.seek(0)
+                
+                first_ward = df.iloc[0].get('Ward Name', df.iloc[0].get('Ward Code', 'unknown'))
+                
+                st.download_button(
+                    label=f"📥 Download Merged PDF ({len(pdf_buffers)} parts)",
+                    data=merged_output.getvalue(),
+                    file_name=f"merged_ward_{first_ward}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                    mime="application/pdf",
+                    key="download-auto-merged"
+                )
+                
+                st.success(f"✅ Merged {len(pdf_buffers)} PDFs successfully!")
+                
+            except Exception as e:
+                st.error(f"Merge failed: {e}")
+        else:
+            st.error("❌ No PDFs could be downloaded.")
+            st.info("💡 The website may require browser authentication. Try the manual method:")
+            st.markdown("1. Download the **HTML with Links** file above")
+            st.markdown("2. Open it in your browser and click each link to download PDFs")
+            st.markdown("3. Use the **Upload & Merge** section below to merge them")
 
 # --- PDF to Excel Conversion & Merge Section ---
 st.markdown("---")
