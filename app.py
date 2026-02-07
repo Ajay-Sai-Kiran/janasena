@@ -5,10 +5,47 @@ import json
 import time
 from datetime import datetime
 import os
-import connection
 from bs4 import BeautifulSoup
 import re
 import glob
+import urllib3
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+# Disable SSL warnings
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+def create_session():
+    """Returns a configured requests.Session object with retries."""
+    session = requests.Session()
+    
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Referer': 'https://urban2025.tsec.gov.in/slNoWardWiseVoterlisturbanMapped.do',
+        'Origin': 'https://urban2025.tsec.gov.in',
+    }
+    
+    session.headers.update(headers)
+    session.verify = False
+    
+    retry_strategy = Retry(
+        total=5,
+        connect=5,
+        read=5,
+        backoff_factor=2,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["HEAD", "GET", "POST", "OPTIONS"]
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    
+    return session
 
 # Set page config
 st.set_page_config(
@@ -48,9 +85,8 @@ def get_session():
     if 'session' not in st.session_state:
         status_text = st.empty()
         status_text.info("Initializing secure session...")
-        session = connection.get_session()
+        session = create_session()  # Use embedded function
         try:
-            # Warm up connection to get fresh cookies
             root_url = "https://urban2025.tsec.gov.in/"
             log_request(root_url, "Warming up session...")
             session.get(root_url, timeout=30)
