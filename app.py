@@ -365,12 +365,42 @@ if st.session_state['download_results']:
     df = pd.DataFrame(st.session_state['download_results'])
     st.success(f"Found {len(df)} records.")
     
-    df_display = df.copy()
-    if 'Link' in df_display.columns:
-        df_display['Link'] = df_display['Link'].apply(lambda x: f'<a href="{x}" target="_blank">📥 Download</a>')
+    st.markdown("**📥 Click buttons below to download PDFs directly:**")
     
-    st.markdown("**Tip:** Click the links below to download PDFs in your browser (most reliable method)")
-    st.markdown(df_display.to_html(escape=False, index=False), unsafe_allow_html=True)
+    # Create individual download buttons for each PDF
+    session = get_session()
+    
+    # Show in expandable sections by ward
+    wards = df['Ward Name'].unique() if 'Ward Name' in df.columns else df['Ward Code'].unique()
+    
+    for ward in wards:
+        ward_df = df[df['Ward Name'] == ward] if 'Ward Name' in df.columns else df[df['Ward Code'] == ward]
+        
+        with st.expander(f"📁 {ward} ({len(ward_df)} parts)", expanded=True):
+            cols = st.columns(5)  # 5 buttons per row
+            
+            for idx, (_, row) in enumerate(ward_df.iterrows()):
+                col_idx = idx % 5
+                part_no = row.get('AC Part No', 'X')
+                filename = f"ward{row.get('Ward Code', 'X')}_part{part_no}.pdf"
+                
+                with cols[col_idx]:
+                    if st.button(f"📥 Part {part_no}", key=f"dl_{ward}_{part_no}"):
+                        try:
+                            with st.spinner(f"Downloading..."):
+                                response = session.get(row['Link'], timeout=60)
+                                if response.status_code == 200 and 'pdf' in response.headers.get('Content-Type', '').lower():
+                                    st.download_button(
+                                        label=f"💾 Save {filename}",
+                                        data=response.content,
+                                        file_name=filename,
+                                        mime="application/pdf",
+                                        key=f"save_{ward}_{part_no}"
+                                    )
+                                else:
+                                    st.error(f"Failed: Not PDF")
+                        except Exception as e:
+                            st.error(f"Error: {str(e)[:30]}")
     
     st.markdown("---")
     st.subheader("📄 Download Options")
