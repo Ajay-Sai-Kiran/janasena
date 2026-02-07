@@ -453,6 +453,44 @@ if st.session_state['download_results']:
         pdf_buffers = []
         failed_downloads = []
         
+        # CRITICAL: Authorize the session first by submitting the form
+        status_text.text("Authorizing session with TSEC server...")
+        try:
+            first_row = df.iloc[0]
+            auth_url = f"{BASE_URL}/slNoWardWiseVoterlisturbanMapped.do"
+            
+            # First, visit the main page to get fresh cookies
+            session.get(auth_url, timeout=30)
+            
+            # Submit form to authorize PDF downloads
+            form_data = {
+                'mode': 'getWardWiseData',
+                'property(election_id)': first_row.get('Election', '186'),
+                'property(district_id)': first_row.get('District', '05'),
+                'property(municipality_id)': first_row.get('Municipality', '1'),
+                'property(ward_id)': first_row.get('Ward Code', '1'),
+                'property(part_no)': first_row.get('AC Part No', '1')
+            }
+            
+            session.headers.update({
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Referer': auth_url
+            })
+            
+            auth_response = session.post(auth_url, data=form_data, timeout=60)
+            
+            if auth_response.status_code == 200:
+                status_text.text("✅ Session authorized. Starting downloads...")
+            else:
+                st.warning(f"Authorization returned {auth_response.status_code}. Downloads may fail.")
+            
+            # Remove Content-Type for subsequent GET requests
+            if 'Content-Type' in session.headers:
+                del session.headers['Content-Type']
+                
+        except Exception as e:
+            st.warning(f"Session auth failed: {e}. Trying downloads anyway...")
+        
         total_parts = len(df)
         for idx, row in df.iterrows():
             part_no = row.get('AC Part No', idx)
